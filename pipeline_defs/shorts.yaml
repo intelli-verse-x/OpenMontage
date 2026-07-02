@@ -1,0 +1,217 @@
+name: shorts
+version: "1.0"
+description: >
+  Short-form vertical video pipeline (shorts / viral / video_shorts). Turns a
+  topic or trend into a 15-60s, sound-off-friendly 9:16 short that opens on a
+  scroll-stopping hook and ends on a clear CTA. Ported from content-factory's
+  ViralShortsPipeline so it runs under EP orchestration with provider scoring,
+  budget caps, and the slideshow-risk gate. Shorts live or die on motion and
+  pacing, so scene_plan and compose are gated on shot intent and motion purpose
+  (anti-slideshow) via OpenMontage's lib/slideshow_risk.py.
+category: generated
+stability: beta
+default_checkpoint_policy: guided
+
+orchestration:
+  mode: executive-producer
+  skill: pipelines/shorts/executive-producer
+  budget_default_usd: 0.75
+  max_revisions_per_stage: 3
+  max_send_backs: 2
+  max_wall_time_minutes: 12
+
+metadata:
+  compose_adapter: "content-factory: pipelines/social/shorts.py :: ViralShortsPipeline"
+  governance_seam: "content-factory: utils/orchestration/scene_gate.py :: run_scene_gate"
+  slideshow_gate:
+    renderer_family: cloud-video
+    render_runtime: cloud
+    applied_at: [scene_plan, compose]
+    enforce_env: VIRAL_SHORTS_ENFORCE_SLIDESHOW
+
+extensions:
+  custom_scripts: true
+  custom_playbooks: true
+  custom_skills: true
+  custom_tools: false
+
+required_skills:
+  - pipelines/shorts/executive-producer
+  - pipelines/shorts/idea-director
+  - pipelines/shorts/script-director
+  - pipelines/shorts/scene-director
+  - pipelines/shorts/asset-director
+  - pipelines/shorts/edit-director
+  - pipelines/shorts/compose-director
+  - pipelines/shorts/publish-director
+  - meta/reviewer
+  - meta/checkpoint-protocol
+
+compatible_playbooks:
+  recommended:
+    - flat-motion-graphics
+    - clean-professional
+  also_works: []
+  custom_allowed: true
+
+stages:
+  - name: idea
+    skill: pipelines/shorts/idea-director
+    produces:
+      - brief
+      - decision_log
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Platform (Shorts/Reels/TikTok), audience, and trend angle identified
+      - Single sharp hook premise and payoff stated
+      - Target duration within the 15-60s short window
+      - Archetype chosen (standard viral / quiz-mystery multi-part / teaching short / event promo / event recap)
+      - Multi-part briefs declare part count, per-part cliffhanger, and region variants if any
+    success_criteria:
+      - Schema-valid brief artifact
+      - Brief states hook premise, payoff, and CTA intent
+
+  - name: script
+    skill: pipelines/shorts/script-director
+    required_artifacts_in:
+      - brief
+    produces:
+      - script
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Hook lands in the first 2 seconds, sound off
+      - Beat-per-shot pacing, no dead air, no filler
+      - CTA is concrete and platform-appropriate
+    success_criteria:
+      - Schema-valid script artifact
+      - Hook, ordered shot beats, and CTA copy all present
+
+  - name: scene_plan
+    skill: pipelines/shorts/scene-director
+    required_artifacts_in:
+      - script
+    optional_artifacts_in:
+      - brief
+    produces:
+      - scene_plan
+    required_tools: []
+    optional_tools:
+      - frame_sampler
+    tools_available:
+      - frame_sampler
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Each shot states an information_role and a shot_intent (anti-slideshow)
+      - Camera movement / motion has a stated purpose, not arbitrary
+      - Shot sizes and framing vary across shots (no repeated static template)
+    success_criteria:
+      - Schema-valid scene_plan artifact
+      - Slideshow-risk verdict is at least 'acceptable' (no 'fail')
+
+  - name: assets
+    skill: pipelines/shorts/asset-director
+    required_artifacts_in:
+      - scene_plan
+    optional_artifacts_in:
+      - script
+    produces:
+      - asset_manifest
+    required_tools:
+      - video_selector
+    optional_tools:
+      - image_selector
+      - tts_selector
+      - music_gen
+      - subtitle_gen
+    tools_available:
+      - video_selector
+      - image_selector
+      - tts_selector
+      - music_gen
+      - subtitle_gen
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - Per-shot clips/stills resolved; video_selector routes generation via lib/scoring.py (no hardcoded provider)
+      - Voiceover (tts_selector) and music bed selected and gain-staged for muted autoplay
+      - Burned-in captions prepared with correct ordering and timing
+    success_criteria:
+      - Schema-valid asset_manifest artifact
+      - One resolved asset per planned shot
+      - Each generated asset records selected_provider + provider_score (scoring audit trail)
+
+  - name: edit
+    skill: pipelines/shorts/edit-director
+    required_artifacts_in:
+      - scene_plan
+      - asset_manifest
+    produces:
+      - edit_decisions
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - Hook beat precedes all shots; CTA beat closes the short
+      - Cuts are motivated and on-beat; total duration within window
+      - 9:16 crop preserves the subject in every shot
+      - "Stickiness: hook strength (promise visible by 2s), cut cadence (no shot outlasts its information), loopability (last frame hands off to first)"
+    success_criteria:
+      - Schema-valid edit_decisions artifact
+      - Ordered timeline with hook -> shots -> CTA
+
+  - name: compose
+    skill: pipelines/shorts/compose-director
+    required_artifacts_in:
+      - edit_decisions
+      - asset_manifest
+    optional_artifacts_in:
+      - scene_plan
+    produces:
+      - render_report
+      - final_review
+    required_tools:
+      - video_compose
+    optional_tools:
+      - hyperframes_compose
+      - audio_mixer
+    tools_available:
+      - video_compose
+      - hyperframes_compose
+      - audio_mixer
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - Output is 9:16 at the platform's target resolution and fps
+      - Slideshow-risk re-check passes before the render is accepted
+      - Captions are legible and synced; loudness within platform spec
+      - "Stickiness: captions from the first word, inside platform safe zones (top ~200px, bottom ~300px, right ~120px); loop seam verified"
+    success_criteria:
+      - Schema-valid render_report artifact
+      - Output file exists and passes ffprobe validation
+      - render_report records the slideshow-risk verdict (governance audit trail)
+
+  - name: publish
+    skill: pipelines/shorts/publish-director
+    required_artifacts_in:
+      - render_report
+      - final_review
+    optional_artifacts_in:
+      - brief
+    produces:
+      - publish_log
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Title, description, and hashtags tuned per platform
+      - Thumbnail/cover frame chosen; duration and dimensions satisfy platform spec
+      - Multi-part series scheduled in order with pinned-comment/description templates and end-card CTA (QR if requested)
+      - Region variants (peak post times, hashtags, caption style) applied when the brief declares them
+    success_criteria:
+      - Schema-valid publish_log artifact
+      - Export directory contains the short with per-platform metadata

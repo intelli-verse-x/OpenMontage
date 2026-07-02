@@ -1,0 +1,208 @@
+name: playable
+version: "1.0"
+description: >
+  Interactive HTML5 playable-ad pipeline. Turns an app/game and its live site into
+  a single self-contained, MRAID-aware playable: a tappable mini-game (quiz / level
+  taste-test) that demonstrates the core loop in seconds and closes on a store CTA.
+  This is the marketing-playable companion to app-preview — the deliverable is an
+  interactive `index.html`, NOT a video, so there is no timeline/edit stage and the
+  slideshow-risk gate is replaced by a network-compliance + genuine-interactivity
+  gate. Ported from content-factory's `playable_quiz_ad` pipeline so it runs under EP
+  orchestration with provider scoring (question writing + brand grounding) and budget
+  caps. The build seam is delegated to the content-factory adapter
+  (`PlayableQuizAdPipeline`) which emits the self-contained playable + a build manifest
+  + a zip, and validates it against common ad-network requirements.
+category: custom
+stability: beta
+default_checkpoint_policy: guided
+
+orchestration:
+  mode: executive-producer
+  skill: pipelines/playable/executive-producer
+  budget_default_usd: 0.25
+  max_revisions_per_stage: 3
+  max_send_backs: 2
+  max_wall_time_minutes: 8
+
+extensions:
+  custom_scripts: true
+  custom_playbooks: true
+  custom_skills: true
+  custom_tools: false
+
+required_skills:
+  - pipelines/playable/executive-producer
+  - pipelines/playable/idea-director
+  - pipelines/playable/script-director
+  - pipelines/playable/design-director
+  - pipelines/playable/asset-director
+  - pipelines/playable/build-director
+  - pipelines/playable/publish-director
+  - meta/reviewer
+  - meta/checkpoint-protocol
+
+compatible_playbooks:
+  recommended:
+    - flat-motion-graphics
+    - clean-professional
+  also_works: []
+  custom_allowed: true
+
+# Anti-pattern gate (replaces slideshow-risk for this non-video pipeline).
+# A playable that is a non-interactive auto-playing animation, ships external
+# asset requests, blows the size budget, or has no working store CTA fails the
+# gate. Implemented by `services.playable.ad_playable.validate_playable` in the
+# content-factory adapter; an OM-native mirror can live in `lib/`. Lives under
+# `metadata` because the manifest schema pins top-level keys.
+metadata:
+  quality_gate:
+    name: playable_compliance
+    enforced_at:
+      - design
+      - build
+    required_checks:
+      - single_file            # one self-contained index.html
+      - no_external_assets     # only the network-injected mraid.js may be external
+      - mraid_aware            # store taps route through mraid.open() with fallbacks
+      - has_cta                # a working store CTA exists
+      - interactive            # genuine user interaction drives the core loop
+      - viewport_meta          # mobile viewport declared
+      - size_within_hard_limit # ≤ 5 MB hard ceiling (≤ 2 MB preferred)
+
+stages:
+  - name: idea
+    skill: pipelines/playable/idea-director
+    produces:
+      - brief
+      - decision_log
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - App/game name, genre, and the single core loop to demonstrate are identified
+      - Target networks chosen (AppLovin / ironSource / Unity / Meta / Google) and their size limits noted
+      - Store destinations captured (App Store URL, Play Store URL) or a fallback URL stated
+      - Playable archetype chosen (quiz taste-test default; flashcard deck / level sampler / tap challenge available)
+    success_criteria:
+      - Schema-valid brief artifact
+      - Brief states the playable archetype, target networks, and store CTA destinations
+
+  - name: script
+    skill: pipelines/playable/script-director
+    required_artifacts_in:
+      - brief
+    produces:
+      - script
+    required_tools: []
+    optional_tools:
+      - text_director
+    tools_available:
+      - text_director
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Interaction copy is instantly understandable (a new user wins in <10s)
+      - Quiz questions are short, fair, on-genre, and mix easy/medium difficulty
+      - Question generation routes via lib/scoring.py when an LLM provider is used (no hardcoded provider)
+      - End-card copy is concrete — headline, blurb, and CTA button label all present
+    success_criteria:
+      - Schema-valid script artifact
+      - N questions (each 4 short options + one correct) + end-card copy present
+      - If LLM-authored, the script records selected_provider + provider_score
+
+  - name: design
+    skill: pipelines/playable/design-director
+    required_artifacts_in:
+      - script
+    optional_artifacts_in:
+      - brief
+    produces:
+      - scene_plan
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Layout is mobile-first portrait; tap targets are large and reachable one-handed
+      - Tap feedback is immediate (correct/incorrect or flip states) and the core loop is genuinely interactive
+      - First 3 seconds state why the player should care; the core loop is taught honestly within 5-10s
+      - State flow is explicit (play screen → feedback → end-card CTA); no dead ends
+      - Compliance pre-check passes the genuine-interactivity + viewport + store-CTA intent
+    success_criteria:
+      - Schema-valid scene_plan artifact
+      - Each state names its interaction and transition (no passive auto-play)
+      - playable_compliance intent checks (interactive, viewport, has_cta) are satisfiable by the plan
+
+  - name: assets
+    skill: pipelines/playable/asset-director
+    required_artifacts_in:
+      - scene_plan
+    optional_artifacts_in:
+      - script
+    produces:
+      - asset_manifest
+    required_tools:
+      - site_harvester
+    optional_tools:
+      - image_selector
+    tools_available:
+      - site_harvester
+      - image_selector
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - Brand is grounded from the live site (accent palette + app icon) when a URL is available
+      - Icon is embedded as a data URI and stays within the size budget (downscaled if needed)
+      - Any generated asset (icon/background) routes via image_selector → lib/scoring.py (no hardcoded provider)
+      - All assets are inlineable — no runtime external fetches survive into the build
+    success_criteria:
+      - Schema-valid asset_manifest artifact
+      - Brand palette + (optional) icon resolved, or a clean unbranded fallback recorded
+      - Each generated asset records selected_provider + provider_score (scoring audit trail)
+
+  - name: build
+    skill: pipelines/playable/build-director
+    required_artifacts_in:
+      - script
+      - scene_plan
+      - asset_manifest
+    produces:
+      - render_report
+      - final_review
+    required_tools:
+      - playable_build
+    optional_tools:
+      - playable_validate
+    tools_available:
+      - playable_build
+      - playable_validate
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - Build delegates to the content-factory adapter (PlayableQuizAdPipeline) — no re-deriving copy/design
+      - Output is ONE self-contained index.html + build manifest + zip
+      - playable_compliance gate passes (single_file, no_external_assets, mraid_aware, has_cta, interactive, viewport, size)
+      - Store CTA resolves iOS vs Android and falls back mraid.open() → clickTag → window.open
+    success_criteria:
+      - Schema-valid render_report artifact
+      - index.html exists, opens in a headless browser, and the quiz → end-card flow is reachable
+      - render_report records compliance checks + size_bytes + sha256 + zip path
+
+  - name: publish
+    skill: pipelines/playable/publish-director
+    required_artifacts_in:
+      - render_report
+      - final_review
+    optional_artifacts_in:
+      - brief
+    produces:
+      - publish_log
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Per-network package prepared (zip for AppLovin/ironSource/Unity; size + format per network)
+      - Store URLs verified present; CTA tested to open the correct destination per platform
+      - Preview screenshots (quiz state + end-card) attached for human review
+    success_criteria:
+      - Schema-valid publish_log artifact
+      - Export directory contains the playable zip + manifest + preview screenshots per target network

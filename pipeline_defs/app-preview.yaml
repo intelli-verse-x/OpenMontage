@@ -1,0 +1,208 @@
+name: app-preview
+version: "1.0"
+description: >
+  App Store / Play Store preview video pipeline. Turns app metadata and a set of
+  screen captures into a short (15-30s), autoplay-muted-friendly preview that
+  opens on a hook and closes on a CTA. Ported from content-factory's
+  hyperframes_app_preview pipeline so it runs under EP orchestration with
+  provider scoring, budget caps, and the slideshow-risk gate. App previews are
+  inherently slideshow-prone (a sequence of screenshots), so the scene_plan and
+  compose stages are gated hard on shot intent and motion purpose.
+category: screen_recording
+stability: beta
+default_checkpoint_policy: guided
+
+orchestration:
+  mode: executive-producer
+  skill: pipelines/app-preview/executive-producer
+  budget_default_usd: 0.50
+  max_revisions_per_stage: 3
+  max_send_backs: 2
+  max_wall_time_minutes: 10
+
+extensions:
+  custom_scripts: true
+  custom_playbooks: true
+  custom_skills: true
+  custom_tools: false
+
+required_skills:
+  - pipelines/app-preview/executive-producer
+  - pipelines/app-preview/idea-director
+  - pipelines/app-preview/script-director
+  - pipelines/app-preview/scene-director
+  - pipelines/app-preview/asset-director
+  - pipelines/app-preview/edit-director
+  - pipelines/app-preview/compose-director
+  - pipelines/app-preview/publish-director
+  - meta/reviewer
+  - meta/checkpoint-protocol
+
+compatible_playbooks:
+  recommended:
+    - clean-professional
+    - flat-motion-graphics
+  also_works: []
+  custom_allowed: true
+
+stages:
+  - name: idea
+    skill: pipelines/app-preview/idea-director
+    produces:
+      - brief
+      - decision_log
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - App name, category, target store (App Store / Play Store) identified
+      - Device preset and aspect ratio chosen (portrait autoplay default)
+      - Single clear value proposition and target audience stated
+    success_criteria:
+      - Schema-valid brief artifact
+      - Brief specifies target duration within the 15-30s store window
+
+  - name: script
+    skill: pipelines/app-preview/script-director
+    required_artifacts_in:
+      - brief
+    produces:
+      - script
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Hook reads clearly in the first 5 seconds with sound off
+      - One benefit line per screen, no jargon, no hashtags
+      - CTA headline + supporting line are concrete and short
+    success_criteria:
+      - Schema-valid script artifact
+      - Hook, per-screen captions, and CTA copy all present
+
+  - name: scene_plan
+    skill: pipelines/app-preview/scene-director
+    required_artifacts_in:
+      - script
+    optional_artifacts_in:
+      - brief
+    produces:
+      - scene_plan
+    required_tools: []
+    optional_tools:
+      - frame_sampler
+    tools_available:
+      - frame_sampler
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Each screen scene states an information_role and a shot_intent (anti-slideshow)
+      - Camera/Ken-Burns movement has a stated purpose, not arbitrary push-in
+      - Shot sizes and layouts vary across scenes (no single repeated template)
+    success_criteria:
+      - Schema-valid scene_plan artifact
+      - Slideshow-risk verdict is at least 'acceptable' (no 'fail')
+
+  - name: assets
+    skill: pipelines/app-preview/asset-director
+    required_artifacts_in:
+      - scene_plan
+    optional_artifacts_in:
+      - script
+    produces:
+      - asset_manifest
+    required_tools:
+      - image_selector
+    optional_tools:
+      - tts_selector
+      - music_gen
+      - subtitle_gen
+      - frame_sampler
+    tools_available:
+      - image_selector
+      - tts_selector
+      - music_gen
+      - subtitle_gen
+      - frame_sampler
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - Screenshots captured/resolved and phone-framed consistently
+      - image_selector routes screen/background generation via lib/scoring.py (no hardcoded provider)
+      - Optional voiceover (tts_selector) generated when the brief requests it; preview must still work fully muted
+      - Optional background music bed selected and gain-staged for muted autoplay
+      - Per-screen captions prepared with correct ordering
+    success_criteria:
+      - Schema-valid asset_manifest artifact
+      - One framed screen asset per planned scene
+      - Each generated asset records selected_provider + provider_score (scoring audit trail)
+
+  - name: edit
+    skill: pipelines/app-preview/edit-director
+    required_artifacts_in:
+      - scene_plan
+      - asset_manifest
+    produces:
+      - edit_decisions
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - Hook card precedes all screens; CTA card closes the preview
+      - Transitions are motivated (cross-fade/whip), not random
+      - Total duration stays within the store's 15-30s window
+      - "Stickiness: hook legible muted by 2s; poster-frame candidate (~5s mark) chosen deliberately; no shot outlasts its caption"
+    success_criteria:
+      - Schema-valid edit_decisions artifact
+      - Ordered timeline with hook → screens → CTA
+
+  - name: compose
+    skill: pipelines/app-preview/compose-director
+    required_artifacts_in:
+      - edit_decisions
+      - asset_manifest
+    optional_artifacts_in:
+      - scene_plan
+    produces:
+      - render_report
+      - final_review
+    required_tools:
+      - video_compose
+    optional_tools:
+      - hyperframes_compose
+      - audio_mixer
+    tools_available:
+      - video_compose
+      - hyperframes_compose
+      - audio_mixer
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - edit_decisions.render_runtime is locked to 'hyperframes' (video_compose dispatches to hyperframes_compose)
+      - HyperFrames composition renders to a re-editable artifact (P1 — editable.json + studio_url present)
+      - Output matches device preset resolution and target fps
+      - Slideshow-risk re-check passes before the render is accepted
+    success_criteria:
+      - Schema-valid render_report artifact
+      - Output file exists and passes ffprobe validation
+      - render_report records the re-editable artifact dir + studio_url (agent → Studio round-trip)
+
+  - name: publish
+    skill: pipelines/app-preview/publish-director
+    required_artifacts_in:
+      - render_report
+      - final_review
+    optional_artifacts_in:
+      - brief
+    produces:
+      - publish_log
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Export packaged with store-specific metadata (title, locale)
+      - Duration and dimensions satisfy the target store's preview spec
+      - "App Store handoff: H.264/AAC .mov or .mp4, <=30fps, <=500MB, 15-30s; poster frame set (Apple default 5s)"
+      - In-app footage only (no lifestyle film) for App Store compliance
+    success_criteria:
+      - Schema-valid publish_log artifact
+      - Export directory contains the preview with store metadata

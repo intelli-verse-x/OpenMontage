@@ -1,0 +1,247 @@
+name: long-form
+version: "1.0"
+description: >
+  Long-form video pipeline (10-60 minutes): documentaries, educational deep-dives,
+  explainers, and interview-style pieces with a multi-chapter structure. Ported
+  from content-factory's long_form_video pipeline (and the generated `documentary`
+  pipeline) so it runs under EP orchestration with provider scoring, budget caps,
+  and the slideshow-risk gate. Long-form lives or dies on the first 30 seconds and
+  on planned re-engagement beats, so the chapter plan encodes retention
+  architecture (hooks, pattern interrupts, chapter cliffs) — not just topic order.
+  Distinct from documentary-montage, which assembles retrieval-first montages from
+  an existing library; this pipeline generates narrated content from a topic.
+category: generated
+stability: beta
+default_checkpoint_policy: guided
+
+orchestration:
+  mode: executive-producer
+  skill: pipelines/long-form/executive-producer
+  budget_default_usd: 5.00
+  max_revisions_per_stage: 3
+  max_send_backs: 2
+  max_wall_time_minutes: 45
+
+metadata:
+  compose_adapter: "content-factory: pipelines/video/long_form.py :: LongFormVideoPipeline"
+  content_types:
+    documentary:   { target_minutes: 30, chapters: 5, pacing: measured }
+    educational:   { target_minutes: 20, chapters: 4, pacing: steady }
+    explainer:     { target_minutes: 15, chapters: 3, pacing: dynamic }
+    interview:     { target_minutes: 45, chapters: 6, pacing: natural }
+    deep_dive:     { target_minutes: 40, chapters: 6, pacing: deliberate }
+  reviewer_panel: multi-llm    # scripts pass a multi-model review before approval
+  output:
+    aspect: "16:9"
+    resolution: 1920x1080
+    fps: 24
+  slideshow_gate:
+    renderer_family: cloud-video
+    render_runtime: cloud
+    applied_at: [scene_plan, compose]
+
+extensions:
+  custom_scripts: true
+  custom_playbooks: true
+  custom_skills: true
+  custom_tools: false
+
+required_skills:
+  - pipelines/long-form/executive-producer
+  - pipelines/long-form/idea-director
+  - pipelines/long-form/chapter-director
+  - pipelines/long-form/script-director
+  - pipelines/long-form/scene-director
+  - pipelines/long-form/asset-director
+  - pipelines/long-form/edit-director
+  - pipelines/long-form/compose-director
+  - pipelines/long-form/publish-director
+  - meta/reviewer
+  - meta/checkpoint-protocol
+
+compatible_playbooks:
+  recommended:
+    - clean-professional
+    - cinematic
+  also_works:
+    - flat-motion-graphics
+  custom_allowed: true
+
+stages:
+  - name: idea
+    skill: pipelines/long-form/idea-director
+    produces:
+      - brief
+      - decision_log
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Content type chosen (documentary / educational / explainer / interview / deep_dive) with matched duration + chapter count
+      - Central question or thesis stated — one sentence the whole video answers
+      - Audience and their retention expectation identified (benchmarks differ by length)
+    success_criteria:
+      - Schema-valid brief artifact
+      - Brief states content type, thesis, target duration, and chapter count
+
+  - name: chapters
+    skill: pipelines/long-form/chapter-director
+    required_artifacts_in:
+      - brief
+    produces:
+      - scene_plan
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Chapter arc escalates toward the thesis payoff; no redundant chapters
+      - Cold-open hook plan leads with the key insight (never a channel intro)
+      - Re-engagement beats planted near the ~25% and ~65% marks (pattern interrupts)
+      - Each chapter ends on a forward pull into the next (chapter cliff)
+    success_criteria:
+      - Schema-valid scene_plan artifact (chapter arc)
+      - One chapter entry per declared chapter with objective + retention beats
+
+  - name: script
+    skill: pipelines/long-form/script-director
+    required_artifacts_in:
+      - scene_plan
+    produces:
+      - script
+    optional_tools:
+      - text_director
+    tools_available:
+      - text_director
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - First 30 seconds deliver the hook and the thesis stake — no throat-clearing
+      - Chapter scripts follow the arc; pattern interrupts written as concrete moments
+      - Multi-LLM reviewer panel notes addressed before approval
+    success_criteria:
+      - Schema-valid script artifact
+      - Full narration per chapter with timed re-engagement beats
+
+  - name: scene_plan
+    skill: pipelines/long-form/scene-director
+    required_artifacts_in:
+      - script
+    optional_artifacts_in:
+      - brief
+    produces:
+      - scene_plan
+    required_tools: []
+    optional_tools:
+      - frame_sampler
+    tools_available:
+      - frame_sampler
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Each scene states an information_role and a shot_intent (anti-slideshow)
+      - B-roll is evidential (proves the narration), not wallpaper
+      - Visual grammar shifts at chapter boundaries and pattern interrupts
+    success_criteria:
+      - Schema-valid scene_plan artifact
+      - Slideshow-risk verdict is at least 'acceptable' (no 'fail') per chapter
+
+  - name: assets
+    skill: pipelines/long-form/asset-director
+    required_artifacts_in:
+      - scene_plan
+    optional_artifacts_in:
+      - script
+    produces:
+      - asset_manifest
+    required_tools:
+      - tts_selector
+    optional_tools:
+      - video_selector
+      - image_selector
+      - music_gen
+      - subtitle_gen
+    tools_available:
+      - tts_selector
+      - video_selector
+      - image_selector
+      - music_gen
+      - subtitle_gen
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - One narrator voice for the whole piece (tts_selector via lib/scoring.py; test line approved before batch)
+      - B-roll resolved per scene (stock-first for real-world subjects, generated where stock fails)
+      - Music beds low (~15% under narration) and chaptered to the arc's energy
+    success_criteria:
+      - Schema-valid asset_manifest artifact
+      - Narration + assets resolved for every planned scene
+      - Each generated asset records selected_provider + provider_score (scoring audit trail)
+
+  - name: edit
+    skill: pipelines/long-form/edit-director
+    required_artifacts_in:
+      - scene_plan
+      - asset_manifest
+    produces:
+      - edit_decisions
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - Cold open intact; any branding after the hook, <=3s
+      - Chapter boundaries land where planned; chapter cliffs preserved
+      - "Stickiness: re-engagement beats verified at ~25%/~65% of the FINAL runtime; no segment sags >90s without a visual or narrative change"
+    success_criteria:
+      - Schema-valid edit_decisions artifact
+      - Ordered chaptered timeline within +/-10% of target duration
+
+  - name: compose
+    skill: pipelines/long-form/compose-director
+    required_artifacts_in:
+      - edit_decisions
+      - asset_manifest
+    optional_artifacts_in:
+      - scene_plan
+    produces:
+      - render_report
+      - final_review
+    required_tools:
+      - video_compose
+    optional_tools:
+      - hyperframes_compose
+      - audio_mixer
+    tools_available:
+      - video_compose
+      - hyperframes_compose
+      - audio_mixer
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - Output at 1920x1080/24fps (or brief override); loudness normalized for long-session listening
+      - Slideshow-risk re-check passes before the render is accepted
+      - Chapter title cards / lower-thirds consistent (HyperFrames overlay pass where planned)
+      - "Stickiness: first-30s frame-sample shows hook + stake; captions inside safe areas"
+    success_criteria:
+      - Schema-valid render_report artifact
+      - Output file exists and passes ffprobe validation
+      - render_report records the slideshow-risk verdict (governance audit trail)
+
+  - name: publish
+    skill: pipelines/long-form/publish-director
+    required_artifacts_in:
+      - render_report
+      - final_review
+    optional_artifacts_in:
+      - brief
+    produces:
+      - publish_log
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Chapter timestamps generated from the final cut (not the plan) for the description
+      - Thumbnail + title tested against the thesis (curiosity without clickbait debt)
+      - Shorts-extraction candidates listed (retention-bump moments make the best clips)
+    success_criteria:
+      - Schema-valid publish_log artifact
+      - Export directory contains the video with chaptered metadata

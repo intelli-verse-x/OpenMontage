@@ -234,6 +234,7 @@ If the folder has tracks, the proposal and asset stages should present them as o
 |----------|----------|-----------|
 | `animated-explainer` | Topic to fully generated explainer | production |
 | `talking-head` | Footage-led speaker videos | beta |
+| `talking-head-composite` | Synthesized presenter explainer (TTS + portrait, composite lip-sync) | beta |
 | `screen-demo` | Screen recordings and walkthroughs | production |
 | `clip-factory` | Many clips from one long source | beta |
 | `podcast-repurpose` | Podcast highlights and derivatives | beta |
@@ -243,6 +244,14 @@ If the folder has tracks, the proposal and asset stages should present them as o
 | `hybrid` | Source footage plus support visuals | production |
 | `avatar-spokesperson` | Presenter-led avatar or lip-sync videos | production |
 | `localization-dub` | Subtitle, dub, and translated variants | beta |
+| `documentary-montage` | Retrieval-first thematic montages from an existing library | beta |
+| `app-preview` | App Store / Play Store preview videos (15–30s, muted-autoplay-first) | beta |
+| `playable` | Interactive HTML5 playable ads (tappable mini-game + store CTA) — output is `index.html`, not a video | beta |
+| `shorts` | 15–60s vertical shorts (viral / quiz-mystery series / teaching / event promo+recap) | beta |
+| `series` | Episodic series (learning curriculum / drama / recap / podcast dialogue) with arc + style bible | beta |
+| `music-video` | Beat-synced music videos from a supplied or generated song | beta |
+| `long-form` | 10–60 min chaptered documentaries, educational deep-dives, explainers | beta |
+| `ad-creative` | 15–30s performance ads with platform aspect variants and A/B angles | beta |
 | `framework-smoke` | Test: minimal 2-stage smoke test | test |
 
 > **Beta pipelines** have not been fully audited. They work, but expect rough edges. Mention this when the user selects one.

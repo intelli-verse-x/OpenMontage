@@ -1,0 +1,223 @@
+name: music-video
+version: "1.0"
+description: >
+  Music video pipeline (song2musicvideo + beat_synced). Turns a song — supplied
+  audio or a generated track — into a beat-synced music video: a visual treatment
+  per song section, generated/curated clips per beat group, and a rhythm-aligned
+  edit where cuts land ~100ms before the beat for perceived on-beat impact.
+  Ported from content-factory's Song2MusicVideoPipeline with the beat_synced
+  editing engine so it runs under EP orchestration with provider scoring, budget
+  caps, and the slideshow-risk gate. Character consistency is preserved across
+  shots when recurring characters are declared.
+category: generated
+stability: beta
+default_checkpoint_policy: guided
+
+orchestration:
+  mode: executive-producer
+  skill: pipelines/music-video/executive-producer
+  budget_default_usd: 2.00
+  max_revisions_per_stage: 3
+  max_send_backs: 2
+  max_wall_time_minutes: 25
+
+metadata:
+  compose_adapter: "content-factory: pipelines/music/song2musicvideo.py :: Song2MusicVideoPipeline"
+  beat_sync:
+    # From content-factory beat_synced.yaml (music_video content type)
+    energy_threshold: 0.35
+    min_interval_s: 2.0
+    transition_style: hard_cut
+    visual_anticipation_ms: 100   # cut slightly BEFORE the beat; vision registers before audio
+    mask_start_s: 0.5
+    mask_end_s: 1.0
+  character_consistency: preserve   # skip img2img enhancement on frames with canonical characters
+  slideshow_gate:
+    renderer_family: cloud-video
+    render_runtime: cloud
+    applied_at: [scene_plan, compose]
+
+extensions:
+  custom_scripts: true
+  custom_playbooks: true
+  custom_skills: true
+  custom_tools: false
+
+required_skills:
+  - pipelines/music-video/executive-producer
+  - pipelines/music-video/idea-director
+  - pipelines/music-video/script-director
+  - pipelines/music-video/scene-director
+  - pipelines/music-video/asset-director
+  - pipelines/music-video/edit-director
+  - pipelines/music-video/compose-director
+  - pipelines/music-video/publish-director
+  - meta/reviewer
+  - meta/checkpoint-protocol
+
+compatible_playbooks:
+  recommended:
+    - cinematic
+    - flat-motion-graphics
+  also_works:
+    - clean-professional
+  custom_allowed: true
+
+stages:
+  - name: idea
+    skill: pipelines/music-video/idea-director
+    produces:
+      - brief
+      - decision_log
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Song source resolved (supplied audio vs generated track) and genre/mood identified
+      - Visual concept states one coherent world/treatment, not a mood-board of unrelated looks
+      - Recurring characters/subjects declared when continuity matters (drives character consistency)
+      - Target platform + aspect (16:9 hero / 9:16 vertical cut) and duration set
+    success_criteria:
+      - Schema-valid brief artifact
+      - Brief states song source, visual concept, and platform targets
+
+  - name: script
+    skill: pipelines/music-video/script-director
+    required_artifacts_in:
+      - brief
+    produces:
+      - script
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Treatment maps song sections (intro/verse/chorus/bridge/outro) to visual movements
+      - Chorus treatment is the visual peak and repeats with escalation, mirroring the music
+      - Narrative or motif thread connects sections (not disconnected vignettes)
+    success_criteria:
+      - Schema-valid script artifact
+      - One treatment block per song section with energy level and visual motif
+
+  - name: scene_plan
+    skill: pipelines/music-video/scene-director
+    required_artifacts_in:
+      - script
+    optional_artifacts_in:
+      - brief
+    produces:
+      - scene_plan
+    required_tools: []
+    optional_tools:
+      - frame_sampler
+    tools_available:
+      - frame_sampler
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Each shot states an information_role and a shot_intent (anti-slideshow)
+      - Shot energy matches its section's musical energy (calm verse vs kinetic chorus)
+      - Actions/impacts are planned to land ON beats; cut density varies by section
+    success_criteria:
+      - Schema-valid scene_plan artifact
+      - Slideshow-risk verdict is at least 'acceptable' (no 'fail')
+
+  - name: assets
+    skill: pipelines/music-video/asset-director
+    required_artifacts_in:
+      - scene_plan
+    optional_artifacts_in:
+      - script
+    produces:
+      - asset_manifest
+    required_tools:
+      - video_selector
+    optional_tools:
+      - music_gen
+      - image_selector
+      - subtitle_gen
+    tools_available:
+      - video_selector
+      - music_gen
+      - image_selector
+      - subtitle_gen
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - Song audio finalized first (generated via music_gen or supplied) — the edit depends on its beat map
+      - Per-shot clips generated via video_selector -> lib/scoring.py (no hardcoded provider)
+      - Recurring characters rendered consistently across shots (canonical reference respected)
+      - Optional lyric captions prepared when the brief requests a lyric video variant
+    success_criteria:
+      - Schema-valid asset_manifest artifact
+      - Final audio track + one resolved clip per planned shot
+      - Each generated asset records selected_provider + provider_score (scoring audit trail)
+
+  - name: edit
+    skill: pipelines/music-video/edit-director
+    required_artifacts_in:
+      - scene_plan
+      - asset_manifest
+    produces:
+      - edit_decisions
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - Beat map extracted from the final audio; cuts land ~100ms before beats (visual anticipation)
+      - Not every beat is cut — actions sync to beats; cut density follows section energy
+      - Chorus sections visibly escalate (faster cuts, bigger shots) vs verses
+      - "Stickiness: opening 2s establishes the visual world; loop seam considered for short cuts"
+    success_criteria:
+      - Schema-valid edit_decisions artifact
+      - Ordered beat-aligned timeline covering the full track
+
+  - name: compose
+    skill: pipelines/music-video/compose-director
+    required_artifacts_in:
+      - edit_decisions
+      - asset_manifest
+    optional_artifacts_in:
+      - scene_plan
+    produces:
+      - render_report
+      - final_review
+    required_tools:
+      - video_compose
+    optional_tools:
+      - hyperframes_compose
+      - audio_mixer
+    tools_available:
+      - video_compose
+      - hyperframes_compose
+      - audio_mixer
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - Output matches target aspect/resolution/fps; audio is the master clock (video conforms to it)
+      - Slideshow-risk re-check passes before the render is accepted
+      - Beat alignment spot-checked at section boundaries (chorus entries land on the drop)
+      - "Stickiness: captions/lyric overlays inside platform safe zones on vertical cuts"
+    success_criteria:
+      - Schema-valid render_report artifact
+      - Output file exists and passes ffprobe validation
+      - render_report records the slideshow-risk verdict (governance audit trail)
+
+  - name: publish
+    skill: pipelines/music-video/publish-director
+    required_artifacts_in:
+      - render_report
+      - final_review
+    optional_artifacts_in:
+      - brief
+    produces:
+      - publish_log
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Hero cut + declared platform variants (9:16 chorus cut for shorts) exported with metadata
+      - Cover frame chosen on a visual peak; title/description/tags per platform
+      - Localization plan recorded when subtitles/dubs are declared (hand off to localization-dub)
+    success_criteria:
+      - Schema-valid publish_log artifact
+      - Export directory contains the video(s) with per-platform metadata

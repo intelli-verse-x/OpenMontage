@@ -1,0 +1,217 @@
+name: ad-creative
+version: "1.0"
+description: >
+  Performance ad pipeline (idea-to-ad). Turns a product/app/offer into a 15-30s
+  performance ad with platform variants (9:16 / 1:1 / 16:9): a problem-promise
+  hook, proof beats, and a direct-response CTA. Ported from content-factory's
+  IdeaToAdPipeline (tier 1) so it runs under EP orchestration with provider
+  scoring, budget caps, and the slideshow-risk gate. Ads are judged on the first
+  2 seconds and the CTA; the edit uses the beat-synced ad preset (tighter
+  min-interval than music video) when a music-driven cut is chosen.
+category: generated
+stability: beta
+default_checkpoint_policy: guided
+
+orchestration:
+  mode: executive-producer
+  skill: pipelines/ad-creative/executive-producer
+  budget_default_usd: 1.00
+  max_revisions_per_stage: 3
+  max_send_backs: 2
+  max_wall_time_minutes: 15
+
+metadata:
+  compose_adapter: "content-factory: pipelines/marketing/ad.py :: IdeaToAdPipeline"
+  beat_sync_preset:
+    # From content-factory beat_synced.yaml (ad content type)
+    energy_threshold: 0.5
+    min_interval_s: 1.5
+    transition_style: hard_cut
+    visual_anticipation_ms: 100
+  slideshow_gate:
+    renderer_family: cloud-video
+    render_runtime: cloud
+    applied_at: [scene_plan, compose]
+
+extensions:
+  custom_scripts: true
+  custom_playbooks: true
+  custom_skills: true
+  custom_tools: false
+
+required_skills:
+  - pipelines/ad-creative/executive-producer
+  - pipelines/ad-creative/idea-director
+  - pipelines/ad-creative/script-director
+  - pipelines/ad-creative/scene-director
+  - pipelines/ad-creative/asset-director
+  - pipelines/ad-creative/edit-director
+  - pipelines/ad-creative/compose-director
+  - pipelines/ad-creative/publish-director
+  - meta/reviewer
+  - meta/checkpoint-protocol
+
+compatible_playbooks:
+  recommended:
+    - flat-motion-graphics
+    - clean-professional
+  also_works:
+    - cinematic
+  custom_allowed: true
+
+stages:
+  - name: idea
+    skill: pipelines/ad-creative/idea-director
+    produces:
+      - brief
+      - decision_log
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Product/offer, single target persona, and ONE conversion objective stated
+      - Angle chosen from research (pain-first / desire-first / social-proof / demo-first)
+      - Platform set + aspect variants declared (9:16 primary; 1:1 / 16:9 as needed)
+    success_criteria:
+      - Schema-valid brief artifact
+      - Brief states offer, persona, angle, CTA destination, and platform variants
+
+  - name: script
+    skill: pipelines/ad-creative/script-director
+    required_artifacts_in:
+      - brief
+    produces:
+      - script
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Hook names the persona's pain or desire in the first 2 seconds, sound off
+      - Proof beats are specific (numbers, demo moments, testimonials) — no vague claims
+      - One CTA, action-led, repeated visually at the end card
+    success_criteria:
+      - Schema-valid script artifact
+      - Hook, ordered proof beats, and CTA copy all present
+
+  - name: scene_plan
+    skill: pipelines/ad-creative/scene-director
+    required_artifacts_in:
+      - script
+    optional_artifacts_in:
+      - brief
+    produces:
+      - scene_plan
+    required_tools: []
+    optional_tools:
+      - frame_sampler
+    tools_available:
+      - frame_sampler
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Each shot states an information_role and a shot_intent (anti-slideshow)
+      - Product/app is on screen within the first 3 seconds
+      - Safe zones respected on 9:16 (text out of top ~200px / bottom ~300px / right ~120px)
+    success_criteria:
+      - Schema-valid scene_plan artifact
+      - Slideshow-risk verdict is at least 'acceptable' (no 'fail')
+
+  - name: assets
+    skill: pipelines/ad-creative/asset-director
+    required_artifacts_in:
+      - scene_plan
+    optional_artifacts_in:
+      - script
+    produces:
+      - asset_manifest
+    required_tools:
+      - video_selector
+    optional_tools:
+      - image_selector
+      - tts_selector
+      - music_gen
+      - subtitle_gen
+    tools_available:
+      - video_selector
+      - image_selector
+      - tts_selector
+      - music_gen
+      - subtitle_gen
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - Per-shot visuals resolved via selectors -> lib/scoring.py (no hardcoded provider)
+      - Product shots faithful to the real product (no misleading generation)
+      - VO + music gain-staged for muted autoplay; captions prepared from the first word
+    success_criteria:
+      - Schema-valid asset_manifest artifact
+      - One resolved asset per planned shot
+      - Each generated asset records selected_provider + provider_score (scoring audit trail)
+
+  - name: edit
+    skill: pipelines/ad-creative/edit-director
+    required_artifacts_in:
+      - scene_plan
+      - asset_manifest
+    produces:
+      - edit_decisions
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - Hook occupies 0-2s; product visible by 3s; CTA end card closes
+      - Beat-synced ad preset applied when music-driven (min interval ~1.5s, cut before beat)
+      - "Stickiness: no shot outlasts its proof; total within 15-30s; caption timing from first word"
+    success_criteria:
+      - Schema-valid edit_decisions artifact
+      - Ordered timeline with hook -> proof -> CTA within the duration window
+
+  - name: compose
+    skill: pipelines/ad-creative/compose-director
+    required_artifacts_in:
+      - edit_decisions
+      - asset_manifest
+    optional_artifacts_in:
+      - scene_plan
+    produces:
+      - render_report
+      - final_review
+    required_tools:
+      - video_compose
+    optional_tools:
+      - hyperframes_compose
+      - audio_mixer
+    tools_available:
+      - video_compose
+      - hyperframes_compose
+      - audio_mixer
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - Primary variant renders at target spec; additional aspect variants reframed (not letterboxed)
+      - Slideshow-risk re-check passes before the render is accepted
+      - "Stickiness: hook legible muted at 0-2s; captions inside safe zones; end-card CTA legible for >=1.5s"
+    success_criteria:
+      - Schema-valid render_report artifact
+      - Output file(s) exist and pass ffprobe validation per variant
+      - render_report records the slideshow-risk verdict (governance audit trail)
+
+  - name: publish
+    skill: pipelines/ad-creative/publish-director
+    required_artifacts_in:
+      - render_report
+      - final_review
+    optional_artifacts_in:
+      - brief
+    produces:
+      - publish_log
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Per-platform packages (aspect, duration, file spec) with ad copy + CTA link
+      - Naming encodes angle/variant for A/B attribution
+      - Localization plan recorded when locales declared (hand off to localization-dub)
+    success_criteria:
+      - Schema-valid publish_log artifact
+      - Export directory contains every declared variant with platform metadata

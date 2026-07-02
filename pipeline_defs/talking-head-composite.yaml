@@ -1,0 +1,215 @@
+name: talking-head-composite
+version: "1.0"
+description: >
+  Synthesized presenter-led talking-head explainer (distinct from the footage-led
+  `talking-head` pipeline). Turns a narration script into a short vertical video of
+  a photorealistic presenter speaking, with audio-synced lip movement, burned
+  captions, and an on-brand frame. Ported from content-factory's
+  hyperframes_talking_head pipeline (PIPELINE_KIND talking_head_composite) so it
+  runs under EP orchestration with provider scoring, a budget cap, and the
+  slideshow-risk gate. Inputs are synthesized locally (TTS narration + a generated
+  presenter portrait) and the render is delegated to content-factory's composite
+  avatar renderer, which produces a re-editable HyperFrames artifact (editable
+  caption + brand overlay). Talking heads have one dominant failure mode — a static
+  portrait reading text — so the scene_plan and compose stages are gated on
+  caption/section motion intent.
+category: talking_head
+stability: beta
+default_checkpoint_policy: guided
+
+orchestration:
+  mode: executive-producer
+  skill: pipelines/talking-head-composite/executive-producer
+  budget_default_usd: 0.50
+  max_revisions_per_stage: 3
+  max_send_backs: 2
+  max_wall_time_minutes: 12
+
+extensions:
+  custom_scripts: true
+  custom_playbooks: true
+  custom_skills: true
+  custom_tools: false
+
+required_skills:
+  - pipelines/talking-head-composite/executive-producer
+  - pipelines/talking-head-composite/idea-director
+  - pipelines/talking-head-composite/script-director
+  - pipelines/talking-head-composite/scene-director
+  - pipelines/talking-head-composite/asset-director
+  - pipelines/talking-head-composite/edit-director
+  - pipelines/talking-head-composite/compose-director
+  - pipelines/talking-head-composite/publish-director
+  - meta/reviewer
+  - meta/checkpoint-protocol
+
+compatible_playbooks:
+  recommended:
+    - clean-professional
+    - flat-motion-graphics
+  also_works: []
+  custom_allowed: true
+
+metadata:
+  render_runtime: composite
+  compose_adapter: "content-factory: pipelines/catalog/hyperframes_talking_head.py :: TalkingHeadPipeline.compose_from_artifacts"
+  slideshow_gate:
+    renderer_family: composite-talking-head
+    render_runtime: composite
+    applied_at:
+      - scene_plan
+      - compose
+
+stages:
+  - name: idea
+    skill: pipelines/talking-head-composite/idea-director
+    produces:
+      - brief
+      - decision_log
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Presenter identity, voice, and emotion/tone chosen
+      - Aspect ratio + device framing chosen (vertical 9:16 autoplay default)
+      - Single clear topic and target audience stated; runtime locked to composite
+    success_criteria:
+      - Schema-valid brief artifact
+      - Brief states topic, presenter persona, voice, and target duration
+
+  - name: script
+    skill: pipelines/talking-head-composite/script-director
+    required_artifacts_in:
+      - brief
+    produces:
+      - script
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Narration is conversational, spoken-word (not bullet copy) and on-topic
+      - Broken into ordered sections/beats, each a single idea for one caption
+      - Opens on a hook in the first sentence; closes on a clear takeaway/CTA
+    success_criteria:
+      - Schema-valid script artifact
+      - Full narration text + ordered sections (each with caption-able text) present
+
+  - name: scene_plan
+    skill: pipelines/talking-head-composite/scene-director
+    required_artifacts_in:
+      - script
+    optional_artifacts_in:
+      - brief
+    produces:
+      - scene_plan
+    required_tools: []
+    optional_tools: []
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Each section beat states an information_role and a motion/shot_intent (anti-static)
+      - Caption cadence + emphasis changes across sections (no single repeated template)
+      - Section count and pacing keep the head from being a static talking portrait
+    success_criteria:
+      - Schema-valid scene_plan artifact
+      - Slideshow-risk verdict is at least 'acceptable' (no 'fail')
+
+  - name: assets
+    skill: pipelines/talking-head-composite/asset-director
+    required_artifacts_in:
+      - scene_plan
+    optional_artifacts_in:
+      - script
+    produces:
+      - asset_manifest
+    required_tools:
+      - tts_selector
+    optional_tools:
+      - image_selector
+      - music_gen
+      - subtitle_gen
+    tools_available:
+      - tts_selector
+      - image_selector
+      - music_gen
+      - subtitle_gen
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - Narration synthesized via tts_selector (routes voice provider via lib/scoring.py; no hardcoded provider)
+      - Presenter portrait resolved or generated via image_selector (front-facing, mouth-closed, on-brand)
+      - Optional music bed selected and gain-staged under the narration
+    success_criteria:
+      - Schema-valid asset_manifest artifact
+      - Narration audio + presenter portrait present
+      - Each synthesized asset records selected_provider + provider_score (scoring audit trail)
+
+  - name: edit
+    skill: pipelines/talking-head-composite/edit-director
+    required_artifacts_in:
+      - scene_plan
+      - asset_manifest
+    produces:
+      - edit_decisions
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - Caption timing aligned to narration sections (script-timed or transcript-driven)
+      - render_runtime locked to 'composite'; compose adapter inputs assembled
+      - Total duration matches the narration length; no dead air at head/tail
+      - "Stickiness: hook line lands in first 2s; captions start at the first word; no section outlasts its idea"
+    success_criteria:
+      - Schema-valid edit_decisions artifact
+      - Ordered caption timeline + compose_adapter_inputs (title, narration/sections, portrait, brand)
+
+  - name: compose
+    skill: pipelines/talking-head-composite/compose-director
+    required_artifacts_in:
+      - edit_decisions
+      - asset_manifest
+    optional_artifacts_in:
+      - scene_plan
+    produces:
+      - render_report
+      - final_review
+    required_tools: []
+    optional_tools:
+      - audio_mixer
+      - subtitle_gen
+    tools_available:
+      - audio_mixer
+      - subtitle_gen
+    checkpoint_required: true
+    human_approval_default: false
+    review_focus:
+      - Render delegated to compose_from_artifacts (composite avatar renderer; NO silent runtime swap)
+      - Lip movement is audio-synced and positioned on the presenter's mouth
+      - Captions burned and legible; output matches aspect preset + target fps
+      - "Stickiness: burned captions inside platform safe zones (top ~200px, bottom ~300px, right ~120px on 9:16)"
+      - Slideshow-risk re-check passes; re-editable artifact (editable.json + studio_url) present
+    success_criteria:
+      - Schema-valid render_report artifact
+      - Output file exists and passes ffprobe validation
+      - render_report records editable_artifact_dir + studio_url (agent → Studio round-trip)
+
+  - name: publish
+    skill: pipelines/talking-head-composite/publish-director
+    required_artifacts_in:
+      - render_report
+      - final_review
+    optional_artifacts_in:
+      - brief
+    produces:
+      - publish_log
+    tools_available: []
+    checkpoint_required: true
+    human_approval_default: true
+    review_focus:
+      - Export packaged with title, locale, and presenter/voice metadata
+      - Duration and dimensions satisfy the target placement
+      - Re-editable source (studio_url + editable_artifact_dir) preserved in the log
+    success_criteria:
+      - Schema-valid publish_log artifact
+      - Export directory contains the video + poster + metadata + editable reference
