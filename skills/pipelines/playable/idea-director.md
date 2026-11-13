@@ -15,6 +15,18 @@ First stage. Turn an app/game (and optionally its live site) into a **brief** fo
 
 **What single core-loop moment, played in under 10 seconds, makes someone want this app?** Everything else serves that. For a quiz/trivia/exam game (e.g. QuizVerse) the answer is almost always: *answer a question, feel smart, see your score, install to keep playing* — the `quiz_taste_test` archetype.
 
+## Runtime constraint before planning
+
+Explain that this pipeline produces a self-contained interactive HTML playable,
+not a rendered video. `render_runtime` is not a video-renderer choice here:
+`remotion` and `hyperframes` video composition cannot replace the HTML/MRAID
+build-director contract. Record the output constraint and the user's acceptance
+under `render_runtime_selection` in the decision log. If the user requests a
+video instead, stop and select an appropriate supported video pipeline rather
+than silently changing this deliverable. Preserve the genuine-interactivity,
+network-compliance and approval gates; this decision does not authorize paid
+calls or publication.
+
 ## Process
 
 ### 1. Identify the app + core loop

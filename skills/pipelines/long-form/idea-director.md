@@ -18,6 +18,20 @@ Turn a topic into a long-form `brief`: content type, one-sentence thesis, target
 - **Length is a cost the content must pay for.** Choose the content type whose preset duration the material genuinely fills; retention benchmarks drop with length (10–15min holds 40–50%, 15+min 35–45%).
 - **Research before structure.** Documentary/deep-dive claims need sources at idea time — the chapter plan is built on what the research actually supports.
 
+## Runtime decision before planning
+
+Resolve `render_runtime` with the user before approving the brief. Read this
+pipeline's compose-director and adapter capabilities: present both `remotion`
+and `hyperframes` when both support the requested output, explain their actual
+tradeoffs, and identify any supported `cloud` adapter separately. A manifest's
+cloud default does not prove another runtime is implemented. If a requested
+runtime or feature is unavailable, disclose that constraint and stop for a
+supported choice; never silently substitute a renderer or promise parity.
+Record the explicit choice and capability constraints under
+`render_runtime_selection` in the decision log, then carry that choice into
+`edit_decisions.render_runtime`. Runtime selection does not authorize paid
+provider calls, publishing, or bypassing the pipeline's approval checkpoints.
+
 ## Process
 
 ### 1. Research

@@ -15,8 +15,10 @@ from __future__ import annotations
 import json
 import os
 import platform
+import re
 import shutil
 import time
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -121,7 +123,12 @@ class GreenScreenProcessor(BaseTool):
 
         method = inputs.get("method", "auto")
         fps = inputs.get("fps", 15)
-        bg_color = inputs.get("bg_color", "#0E172A")
+        bg_color_raw = inputs.get("bg_color", "#0E172A")
+        try:
+            bg_hex = self._validate_hex_color(bg_color_raw)
+            bg_color = f"#{bg_hex}"
+        except ValueError as e:
+            return ToolResult(success=False, error=str(e))
         max_frames = inputs.get("max_frames", 0)
         start = time.time()
 
@@ -140,8 +147,7 @@ class GreenScreenProcessor(BaseTool):
             method = self._auto_detect_method(input_path, duration, width, height)
 
         # Step 3: Set up temp directory for frame processing
-        temp_dir = output_path.parent / f".gs_tmp_{int(time.time())}"
-        temp_dir.mkdir(parents=True, exist_ok=True)
+        temp_dir = Path(tempfile.mkdtemp(prefix=".gs_tmp_", dir=output_path.parent))
 
         try:
             # Step 4: Extract frames at target fps
@@ -161,7 +167,7 @@ class GreenScreenProcessor(BaseTool):
 
             if method == "chromakey":
                 ok = self._process_chromakey(
-                    frames_dir, processed_dir, bg_color, frame_count
+                    frames_dir, processed_dir, bg_color, frame_count, width, height
                 )
             else:
                 ok = self._process_rembg(
@@ -249,8 +255,7 @@ class GreenScreenProcessor(BaseTool):
         Extracts 5 evenly-spaced frames, checks color histograms for
         green/blue screen presence, then tests chromakey quality on a sample.
         """
-        temp_dir = input_path.parent / f".gs_detect_{int(time.time())}"
-        temp_dir.mkdir(parents=True, exist_ok=True)
+        temp_dir = Path(tempfile.mkdtemp(prefix=".gs_detect_", dir=input_path.parent))
 
         try:
             # Extract 5 sample frames evenly spaced
@@ -445,12 +450,14 @@ class GreenScreenProcessor(BaseTool):
         processed_dir: Path,
         bg_color: str,
         frame_count: int,
+        width: int,
+        height: int,
     ) -> bool:
         """Process frames using FFmpeg chromakey filter.
 
         Applies chromakey to remove green, then composites onto bg_color.
         """
-        bg_hex = bg_color.lstrip("#")
+        bg_hex = self._validate_hex_color(bg_color)
         # Convert hex to FFmpeg color format
         ffmpeg_bg = f"0x{bg_hex}"
 
@@ -461,13 +468,23 @@ class GreenScreenProcessor(BaseTool):
             out_path = processed_dir / frame.name
             cmd = [
                 "ffmpeg", "-y",
-                "-f", "lavfi", "-i", f"color=c={ffmpeg_bg}:size=1x1",
+                # Background sized to the frame up front. The old code used a 1x1
+                # color source and `[0:v]scale=iw:ih` — a no-op (iw/ih were the
+                # 1x1 source's own size) — and overlay takes the size of its
+                # FIRST input, so every frame was clipped to a single pixel and
+                # the whole video came out a solid color with the subject gone.
+                "-f", "lavfi", "-i", f"color=c={ffmpeg_bg}:size={width}x{height}",
                 "-i", str(frame),
                 "-filter_complex",
                 (
-                    f"[0:v]scale=iw:ih[bg];"
-                    f"[1:v]chromakey=color=0x00FF00:similarity=0.3:blend=0.08[fg];"
-                    f"[bg][fg]overlay=0:0"
+                    # Force an explicit alpha format after chromakey so the keyed
+                    # transparency survives filter negotiation on every FFmpeg
+                    # build — without it, some Linux builds carry the keyed frame
+                    # forward without an alpha plane and overlay draws opaque
+                    # green over the background instead of compositing.
+                    f"[1:v]chromakey=color=0x00FF00:similarity=0.3:blend=0.08,"
+                    f"format=yuva420p[fg];"
+                    f"[0:v][fg]overlay=0:0:format=auto,format=yuv420p"
                 ),
                 "-frames:v", "1",
                 str(out_path),
@@ -530,7 +547,7 @@ class GreenScreenProcessor(BaseTool):
             return False
 
         # Parse bg_color hex to RGB
-        bg_hex = bg_color.lstrip("#")
+        bg_hex = self._validate_hex_color(bg_color)
         bg_r = int(bg_hex[0:2], 16)
         bg_g = int(bg_hex[2:4], 16)
         bg_b = int(bg_hex[4:6], 16)
@@ -592,6 +609,34 @@ class GreenScreenProcessor(BaseTool):
             str(output_path),
         ]
         self.run_command(cmd, timeout=600)
+
+    @staticmethod
+    def _validate_hex_color(bg_color: str) -> str:
+        """Validate and normalize a background hex color string.
+
+        Accepts 3, 6, or 8 character hex strings with optional leading "#".
+        Returns a canonical normalized uppercase hex string (e.g., "0E172A").
+        Raises ValueError if the input is not a valid hex color or contains
+        any injection characters.
+        """
+        if not isinstance(bg_color, str):
+            raise ValueError(f"Invalid bg_color: expected string, got {type(bg_color).__name__}")
+
+        s = bg_color.strip().removeprefix("#")
+
+        if not re.fullmatch(r"[0-9a-fA-F]+", s):
+            raise ValueError(
+                f"Invalid bg_color: '{bg_color}'. Expected hex color string (e.g., '#0E172A')."
+            )
+
+        if len(s) == 3:
+            return "".join(c * 2 for c in s).upper()
+        elif len(s) in (6, 8):
+            return s.upper()
+        else:
+            raise ValueError(
+                f"Invalid bg_color: '{bg_color}'. Expected 3, 6, or 8 hex digits."
+            )
 
     @staticmethod
     def _cleanup_dir(dir_path: Path) -> None:

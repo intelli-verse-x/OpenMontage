@@ -18,6 +18,20 @@ Turn a topic or premise into a series `brief`: format, episode count, per-episod
 - **Episode count is earned.** Only as many episodes as there are distinct objectives; 6 strong episodes beat 12 padded ones.
 - **Personas before scripts.** Hosts/characters (or podcast host+guest pairs) are defined here so the voice never drifts.
 
+## Runtime decision before planning
+
+Resolve `render_runtime` with the user before approving the brief. Read this
+pipeline's compose-director and adapter capabilities: present both `remotion`
+and `hyperframes` when both support the requested output, explain their actual
+tradeoffs, and identify any supported `cloud` adapter separately. A manifest's
+cloud default does not prove another runtime is implemented. If a requested
+runtime or feature is unavailable, disclose that constraint and stop for a
+supported choice; never silently substitute a renderer or promise parity.
+Record the explicit choice and capability constraints under
+`render_runtime_selection` in the decision log, then carry that choice into
+`edit_decisions.render_runtime`. Runtime selection does not authorize paid
+provider calls, publishing, or bypassing the pipeline's approval checkpoints.
+
 ## Process
 
 ### 1. Research

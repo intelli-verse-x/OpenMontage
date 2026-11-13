@@ -26,7 +26,7 @@ from functools import lru_cache
 
 @lru_cache(maxsize=1)
 def _load_manifest_schema() -> dict:
-    with open(SCHEMA_PATH) as f:
+    with open(SCHEMA_PATH, encoding="utf-8") as f:
         return json.load(f)
 
 
@@ -61,7 +61,7 @@ def load_pipeline(name: str, defs_dir: Optional[Path] = None) -> dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"Pipeline manifest not found: {path}")
 
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         manifest = yaml.safe_load(f)
 
     schema = _load_manifest_schema()
@@ -160,6 +160,28 @@ def get_required_tools(manifest: dict) -> set[str]:
             tools.update(sub_stage.get("tools_available", []))
     tools.update(get_reference_input_config(manifest).get("analysis_tools", []))
     return tools
+
+
+def get_stage_tools(manifest: dict, stage_name: str) -> set[str]:
+    """Collect every tool a stage or one of its sub-stages declares."""
+    tool_fields = (
+        "required_tools",
+        "optional_tools",
+        "preferred_tools",
+        "fallback_tools",
+        "tools_available",
+    )
+    for stage in manifest["stages"]:
+        if stage["name"] != stage_name:
+            continue
+        tools: set[str] = set()
+        for field in tool_fields:
+            tools.update(stage.get(field, []))
+        for sub_stage in stage.get("sub_stages", []):
+            for field in tool_fields:
+                tools.update(sub_stage.get(field, []))
+        return tools
+    return set()
 
 
 def get_stage_skill(manifest: dict, stage_name: str) -> Optional[str]:

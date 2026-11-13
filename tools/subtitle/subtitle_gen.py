@@ -8,6 +8,7 @@ the standard library.
 from __future__ import annotations
 
 import json
+from html import escape
 import time
 from pathlib import Path
 from typing import Any
@@ -158,7 +159,7 @@ class SubtitleGen(BaseTool):
                     import re as _re
                     seg["text"] = _re.sub(
                         r"\b" + _re.escape(wrong) + r"\b",
-                        right,
+                        lambda match, replacement=right: replacement,
                         seg["text"],
                         flags=_re.IGNORECASE,
                     )
@@ -279,14 +280,14 @@ class SubtitleGen(BaseTool):
                     lines.append(
                         f"{self._ts_vtt(word_info['start'])} --> {self._ts_vtt(word_info['end'])}"
                     )
-                    lines.append(word_info["word"])
+                    lines.append(escape(word_info["word"], quote=False))
                     lines.append("")
         elif highlight_style == "karaoke":
             for cue in cues:
                 words = cue.get("words", [])
                 if not words:
                     lines.append(f"{self._ts_vtt(cue['start'])} --> {self._ts_vtt(cue['end'])}")
-                    lines.append(cue["text"])
+                    lines.append(escape(cue["text"], quote=False))
                     lines.append("")
                     continue
                 for wi, word_info in enumerate(words):
@@ -296,32 +297,40 @@ class SubtitleGen(BaseTool):
                     parts = []
                     for wj, w in enumerate(words):
                         if wj == wi:
-                            parts.append(f"<b>{w['word']}</b>")
+                            parts.append(f"<b>{escape(w['word'], quote=False)}</b>")
                         else:
-                            parts.append(w["word"])
+                            parts.append(escape(w["word"], quote=False))
                     lines.append(" ".join(parts))
                     lines.append("")
         else:
             for cue in cues:
                 lines.append(f"{self._ts_vtt(cue['start'])} --> {self._ts_vtt(cue['end'])}")
-                lines.append(cue["text"])
+                lines.append(escape(cue["text"], quote=False))
                 lines.append("")
         return "\n".join(lines)
 
     @staticmethod
-    def _ts_srt(seconds: float) -> str:
+    def _hmsms(seconds: float) -> tuple[int, int, int, int]:
+        """Decompose seconds into (h, m, s, ms), rounding to whole ms first.
+
+        Rounding to total milliseconds before splitting the fields lets the
+        carry propagate: 0.9995s+ must become the next second (…,000), not a
+        malformed 4-digit …,1000 with the seconds field left unincremented.
+        """
+        total_ms = int(round(max(0.0, seconds) * 1000))
+        h, rem = divmod(total_ms, 3_600_000)
+        m, rem = divmod(rem, 60_000)
+        s, ms = divmod(rem, 1_000)
+        return h, m, s, ms
+
+    @classmethod
+    def _ts_srt(cls, seconds: float) -> str:
         """Format seconds as SRT timestamp: HH:MM:SS,mmm"""
-        h = int(seconds // 3600)
-        m = int((seconds % 3600) // 60)
-        s = int(seconds % 60)
-        ms = int(round((seconds % 1) * 1000))
+        h, m, s, ms = cls._hmsms(seconds)
         return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
-    @staticmethod
-    def _ts_vtt(seconds: float) -> str:
+    @classmethod
+    def _ts_vtt(cls, seconds: float) -> str:
         """Format seconds as VTT timestamp: HH:MM:SS.mmm"""
-        h = int(seconds // 3600)
-        m = int((seconds % 3600) // 60)
-        s = int(seconds % 60)
-        ms = int(round((seconds % 1) * 1000))
+        h, m, s, ms = cls._hmsms(seconds)
         return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
