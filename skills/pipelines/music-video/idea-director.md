@@ -18,6 +18,20 @@ Turn a song (or a request for one) into a music-video `brief`: the song source, 
 - **The song dictates everything.** Genre, tempo, and structure constrain the visual energy — listen (or spec the generated track) before ideating visuals.
 - **Continuity is declared, not discovered.** If a character/subject recurs, name them now so assets can enforce canonical appearance.
 
+## Runtime decision before planning
+
+Resolve `render_runtime` with the user before approving the brief. Read this
+pipeline's compose-director and adapter capabilities: present both `remotion`
+and `hyperframes` when both support the requested output, explain their actual
+tradeoffs, and identify any supported `cloud` adapter separately. A manifest's
+cloud default does not prove another runtime is implemented. If a requested
+runtime or feature is unavailable, disclose that constraint and stop for a
+supported choice; never silently substitute a renderer or promise parity.
+Record the explicit choice and capability constraints under
+`render_runtime_selection` in the decision log, then carry that choice into
+`edit_decisions.render_runtime`. Runtime selection does not authorize paid
+provider calls, publishing, or bypassing the pipeline's approval checkpoints.
+
 ## Process
 
 ### 1. Resolve the song source
