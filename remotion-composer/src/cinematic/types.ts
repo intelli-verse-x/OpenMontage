@@ -1,3 +1,4 @@
+import type { CaptionProps } from "../components/CaptionOverlay";
 export type CinematicTone = "cold" | "steel" | "void" | "neutral";
 
 export interface CinematicBaseScene {
@@ -12,6 +13,7 @@ export interface CinematicVideoScene extends CinematicBaseScene {
   tone?: CinematicTone;
   trimBeforeSeconds?: number;
   trimAfterSeconds?: number;
+  playbackRate?: number;
   filter?: string;
   fadeInFrames?: number;
   fadeOutFrames?: number;
@@ -63,4 +65,5 @@ export interface CinematicRendererProps {
   soundtrack?: CinematicSoundtrack;
   music?: CinematicSoundtrack;
   captions?: CinematicCaptionConfig;
+  captionProps?: CaptionProps; // extra CaptionOverlay props
 }

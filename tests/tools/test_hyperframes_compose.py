@@ -9,6 +9,7 @@ in tests/qa/test_09_hyperframes_compose.py and are opt-in.
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -250,6 +251,11 @@ def test_runtime_check_succeeds_when_npm_resolves(monkeypatch):
         "_resolve_npm_package",
         classmethod(lambda cls: {"version": "0.4.5"}),
     )
+    monkeypatch.setattr(
+        HyperFramesCompose,
+        "_probe_cli",
+        classmethod(lambda cls: {"status": "ok"}),
+    )
     rc = HyperFramesCompose()._runtime_check()
     # Local binaries must still pass for this to go green.
     if rc["node_major"] is None or not rc["ffmpeg_available"] or not rc["npx_available"]:
@@ -257,6 +263,106 @@ def test_runtime_check_succeeds_when_npm_resolves(monkeypatch):
     assert rc["runtime_available"] is True
     assert rc["npm_package_version"] == "0.4.5"
     assert rc["reasons"] == []
+
+
+def test_runtime_check_fails_when_published_cli_crashes(monkeypatch):
+    monkeypatch.setattr(
+        HyperFramesCompose,
+        "_resolve_npm_package",
+        classmethod(lambda cls: {"version": "0.7.89"}),
+    )
+    monkeypatch.setattr(
+        HyperFramesCompose,
+        "_probe_cli",
+        classmethod(
+            lambda cls: {
+                "error": 'doctor failed: The "file" argument must be of type string'
+            }
+        ),
+    )
+
+    rc = HyperFramesCompose()._runtime_check()
+
+    if rc["node_major"] is None or not rc["ffmpeg_available"] or not rc["npx_available"]:
+        pytest.skip("Local runtime floor not met on this machine")
+    assert rc["runtime_available"] is False
+    assert rc["cli_probe_error"] is not None
+    assert any("not executable" in reason for reason in rc["reasons"])
+
+
+def _fake_npm(monkeypatch, handler):
+    """Route the probes' subprocess calls through `handler(cmd)` and record them."""
+    import tools.video.hyperframes_compose as hf_mod
+
+    calls: list[list[str]] = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return handler(cmd)
+
+    monkeypatch.setattr(hf_mod.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(hf_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(HyperFramesCompose, "_npm_resolve_cache", None)
+    monkeypatch.setattr(HyperFramesCompose, "_cli_probe_cache", None)
+    return calls
+
+
+def test_npm_resolve_uses_local_cache_without_registry(monkeypatch):
+    """Regression (#590): a warm npx cache renders offline, so a slow registry
+    must not make the runtime unavailable."""
+
+    def handler(cmd):
+        if "--offline" in cmd:
+            return subprocess.CompletedProcess(cmd, 0, stdout="0.8.20\n", stderr="")
+        raise AssertionError(f"registry must not be queried: {cmd}")
+
+    calls = _fake_npm(monkeypatch, handler)
+
+    assert HyperFramesCompose._resolve_npm_package() == {"version": "0.8.20"}
+    assert calls == [["/usr/bin/npx", "--offline", "hyperframes", "--version"]]
+
+
+def test_npm_resolve_timeout_is_not_cached(monkeypatch):
+    """Regression (#590): one slow `npm view` must not poison later calls."""
+    attempts = {"view": 0}
+
+    def handler(cmd):
+        if "--offline" in cmd:
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="ENOTCACHED")
+        attempts["view"] += 1
+        if attempts["view"] == 1:
+            raise subprocess.TimeoutExpired(cmd, 5)
+        return subprocess.CompletedProcess(cmd, 0, stdout="0.8.20\n", stderr="")
+
+    _fake_npm(monkeypatch, handler)
+
+    assert "timeout" in HyperFramesCompose._resolve_npm_package()["error"]
+    assert HyperFramesCompose._npm_resolve_cache is None
+    assert HyperFramesCompose._resolve_npm_package() == {"version": "0.8.20"}
+
+
+def test_npm_resolve_404_is_still_cached(monkeypatch):
+    def handler(cmd):
+        if "--offline" in cmd:
+            return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="ENOTCACHED")
+        return subprocess.CompletedProcess(cmd, 1, stdout="", stderr="npm error code E404")
+
+    calls = _fake_npm(monkeypatch, handler)
+
+    first = HyperFramesCompose._resolve_npm_package()
+    assert "404" in first["error"]
+    assert HyperFramesCompose._resolve_npm_package() is first
+    assert len(calls) == 2  # offline probe + npm view, then served from cache
+
+
+def test_cli_probe_timeout_is_not_cached(monkeypatch):
+    def handler(cmd):
+        raise subprocess.TimeoutExpired(cmd, 20)
+
+    _fake_npm(monkeypatch, handler)
+
+    assert "timed out" in HyperFramesCompose._probe_cli()["error"]
+    assert HyperFramesCompose._cli_probe_cache is None
 
 
 def test_video_compose_render_engines_follow_hyperframes_runtime_check(monkeypatch):
@@ -353,6 +459,40 @@ def test_hyperframes_render_requires_workspace():
     assert ("workspace" in err) or ("runtime" in err) or ("hyperframes" in err)
 
 
+def test_hyperframes_render_resolves_relative_output_path_once(tmp_path, monkeypatch):
+    """A successful CLI render must not be reported missing for a relative path."""
+    import subprocess
+
+    from tools.base_tool import ToolResult
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    tool = HyperFramesCompose()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(tool, "_runtime_check", lambda: {"runtime_available": True})
+    monkeypatch.setattr(tool, "_scaffold", lambda inputs: ToolResult(success=True, data={}))
+    monkeypatch.setattr(tool, "_lint", lambda inputs: ToolResult(success=True, data={}))
+    monkeypatch.setattr(tool, "_validate", lambda inputs: ToolResult(success=True, data={}))
+
+    def run_render(args, *, cwd, timeout, check):
+        output = Path(args[args.index("--output") + 1])
+        rendered_output = output if output.is_absolute() else cwd / output
+        rendered_output.parent.mkdir(parents=True, exist_ok=True)
+        rendered_output.write_bytes(b"rendered")
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(tool, "_run_hf", run_render)
+
+    result = tool._render(
+        {"workspace_path": str(workspace), "output_path": "renders/final.mp4"}
+    )
+
+    expected = tmp_path / "renders" / "final.mp4"
+    assert result.success, result.error
+    assert result.data["output"] == str(expected)
+    assert result.artifacts == [str(expected)]
+
+
 # ------------------------------------------------------------------
 # video_compose runtime routing
 # ------------------------------------------------------------------
@@ -437,11 +577,15 @@ def test_video_compose_rejects_missing_render_runtime(tmp_path):
     assert "remotion render failed" not in err
 
 
-def test_schemas_require_render_runtime():
-    """Regression: both proposal_packet and edit_decisions schemas must
-    REQUIRE render_runtime, not just declare it as an optional property."""
+def test_schemas_require_render_runtime_at_the_approval_boundary():
+    """Proposal runtime is required after approval, but not while awaiting it."""
     import json
     from pathlib import Path
+
+    from jsonschema import ValidationError
+
+    from schemas.artifacts import validate_artifact
+    from tests.contracts.test_phase0_contracts import sample_artifact
 
     root = Path(__file__).resolve().parent.parent.parent
 
@@ -461,10 +605,22 @@ def test_schemas_require_render_runtime():
         )
     )
     pp_prod = pp["properties"]["production_plan"]
-    assert "render_runtime" in pp_prod["required"], (
-        "proposal_packet.production_plan must require render_runtime — "
-        "the proposal stage MUST pick a runtime explicitly."
+    assert "render_runtime" not in pp_prod["required"], (
+        "proposal_packet.production_plan must defer render_runtime until "
+        "the user approves the proposal."
     )
+
+    pending = sample_artifact("proposal_packet")
+    pending["approval"] = {"status": "pending"}
+    pending["production_plan"].pop("render_runtime")
+    validate_artifact("proposal_packet", pending)
+
+    for approval_status in ("approved", "approved_with_changes"):
+        approved = sample_artifact("proposal_packet")
+        approved["approval"]["status"] = approval_status
+        approved["production_plan"].pop("render_runtime")
+        with pytest.raises(ValidationError, match="render_runtime"):
+            validate_artifact("proposal_packet", approved)
 
 
 def test_runtime_swap_detected_flips_when_proposal_packet_disagrees(tmp_path):

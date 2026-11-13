@@ -24,6 +24,7 @@ from tools.base_tool import (
     ToolStatus,
     ToolTier,
 )
+from tools.enhancement._basicsr_compat import ensure_basicsr_compat
 
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".avi"}
@@ -114,6 +115,7 @@ class Upscale(BaseTool):
 
     def get_status(self) -> ToolStatus:
         try:
+            ensure_basicsr_compat()
             import realesrgan  # noqa: F401
             return ToolStatus.AVAILABLE
         except ImportError:
@@ -273,6 +275,8 @@ class Upscale(BaseTool):
         import inspect
 
         import torch
+
+        ensure_basicsr_compat()
         from basicsr.archs.rrdbnet_arch import RRDBNet
         from realesrgan import RealESRGANer
 
@@ -297,6 +301,11 @@ class Upscale(BaseTool):
             "model": model,
             "dni_weight": denoise_strength,
             "half": half,
+            # Full-frame x4 inference can terminate the process on low-memory
+            # CPU/MPS hosts before Python can raise an exception. Bound the
+            # working set there; keep CUDA on the faster single-pass path.
+            "tile": 0 if _device == "cuda" else 256,
+            "tile_pad": 10,
         }
         # Guard: only pass device= if the installed version accepts it
         if "device" in inspect.signature(RealESRGANer.__init__).parameters:
